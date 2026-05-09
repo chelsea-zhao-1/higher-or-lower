@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/.env
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Contracts deps (large)
+contracts/node_modules/
