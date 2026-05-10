@@ -1,76 +1,86 @@
 # Higher or Lower
 
-An on-chain card guessing game deployed on [Arc Testnet](https://arc.network). Guess whether the next card is higher or lower than the current one. Deposit once, play as many rounds as you want, cash out whenever — only two blockchain transactions required for an entire session.
+An on-chain card game. Players deposit USDC on Circle Arc Testnet, bet and guess higher or lower on as many rounds as they want, and cash out. All verified by the smart contract, no middleman. Unlimited rounds, two transactions.
+
+**Live contract:** `0xB0A622de5A303ef6488A676884e8468e0CE4C6d2` on Arc Testnet (chain ID 5042002)
 
 ---
 
-## Gameplay
+# The Problem
 
-### How a Session Works
+Traditional betting has a trust problem. Casinos and online platforms control the outcome — you're taking their word for it. Online platforms add fees on top, and you have no way to verify whether a result was changed after you placed your guess.
 
-1. **Deposit** — Enter an amount of USDC and a session duration (1h, 4h, or 24h). This sends a single transaction to the contract and locks in your stake.
-2. **Authorize** — Sign a gasless EIP-712 message in MetaMask. This signature authorizes your eventual cashout without any additional on-chain cost.
-3. **Play rounds** — Each round is entirely off-chain:
-   - A card is revealed to you.
-   - You bet some amount of your balance and guess: **Higher** or **Lower**.
-   - The next card is revealed. If you guessed correctly, your bet is added to your balance. If not, it's subtracted (your balance is always floored at zero — you can never go negative).
-   - Ties leave your balance unchanged.
-   - Repeat as many rounds as you want within your session window.
-4. **Cash out** — Submit one final transaction. The contract verifies your entire session history and pays out your final balance.
+Going on-chain fixes the trust problem but creates a new one: if the contract picks each card the moment you guess, a miner can see your transaction in the mempool, know the next card, and front-run or suppress it. The house edge becomes an attack vector.
 
-**Total MetaMask interactions for any number of rounds: 2 transactions + 1 free signature.**
+This game eliminates both. The card sequence is locked in cryptographically before play starts, and every outcome is verified on-chain at cashout.
 
-### Card Rankings
+---
 
-Cards rank from **1 (lowest) to 13 (highest)**:
+## What I Built
+
+The challenge was making a game that is simultaneously:
+
+- **Trustless** — neither the house nor the player can manipulate the cards
+- **Gas-efficient** — gameplay doesn't require an on chain transaction per round
+- **Financially sound** — the house can always pay out; players can always recover funds
+
+The solution combines a commit/reveal randomness scheme with EIP-712 session keys and full on-chain replay verification at cashout.
+
+### House model
+
+I deploy the contract and seed it with USDC as the house bankroll. Players deposit to bet against that bankroll. The contract enforces a 2× check at deposit time — if my house balance can't cover a full-win session, no new sessions can open. When players lose rounds, the USDC stays in the contract. I can withdraw profits via `withdrawHouse()` at any time.
+
+---
+
+## How to Play
+
+1. **Connect** — MetaMask on Arc Testnet.
+2. **Deposit** — Choose a USDC amount and session duration (1h / 4h / 24h). One on-chain transaction.
+3. **Authorize** — Sign a gasless EIP-712 message to lock in cashout rights. No gas.
+4. **Play** — Entirely off-chain. Guess higher or lower each round; wins add to your balance, losses subtract. Tie: no change. Play as many rounds as you want within your session window.
+5. **Cash out** — One final transaction. The contract independently verifies every round and pays out.
+
+**Two transactions + one signature for an unlimited number of rounds.**
+
+### Card rankings
+
+Cards rank from **1 (Ace, lowest) to 13 (King, highest)**:
 
 | Value | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
 |-------|---|---|---|---|---|---|---|---|---|----|----|----|----|
 | Label | A | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | J  | Q  | K  |
 
-Ace is the lowest card. King is the highest. There are no jokers.
+Suits are cosmetic — outcomes are determined by rank only.
 
-### Suits Are Cosmetic
+### Session expiry
 
-The four suits (♠ ♥ ♦ ♣) are **display-only** and have no effect on game logic. Every outcome — win, loss, tie — is determined solely by the numeric rank of the current and next card. A 7♠ and a 7♥ are identical for gameplay purposes.
+If a session expires before cashout, the player calls `refundExpired` to recover their original deposit. The frontend detects stale sessions from localStorage and surfaces the refund option automatically.
 
 ---
 
-## Security & Trustlessness
+## Security
 
-### The Problem with On-Chain Randomness
+### Commit / reveal randomness
 
-A naive on-chain card game runs into a fundamental problem: if the contract picks your next card at the moment you guess, a miner or validator could see your transaction in the mempool, know the next card, and front-run or suppress your transaction. Alternatively, if the random card is chosen from block data, the house could theoretically influence block production.
+The full card sequence is locked in before the game starts:
 
-This game eliminates both attack vectors.
-
-### Commit / Reveal Randomness
-
-Before any card is shown, the **entire sequence of cards for the session is locked in** using a cryptographic commitment scheme:
-
-1. **Commit (deposit time):** The frontend generates a random 256-bit `masterSecret`. It hashes it:
+1. **Commit (at deposit)** — The frontend generates a random 256-bit `masterSecret` and sends only its hash to the contract:
    ```
    commitment = keccak256(masterSecret)
    ```
-   Only the commitment (a hash) is sent to the contract. The secret itself stays in the browser.
+   The secret stays in the browser until cashout.
 
-2. **Derive (during play):** Every card is derived deterministically from the secret:
+2. **Derive (during play)** — Each card is derived deterministically:
    ```
    card = keccak256(masterSecret, roundNum, nonce) % 13 + 1
    ```
-   `nonce = 0` gives the current card, `nonce = 1` gives the next card. This means the full deck sequence is fixed the moment you deposit — neither the player nor the contract can alter it.
+   `nonce = 0` → current card. `nonce = 1` → next card. The full sequence is fixed at deposit time — neither party can alter it.
 
-3. **Reveal (cashout):** The player submits `masterSecret` to the contract. The contract:
-   - Verifies `keccak256(masterSecret) == stored commitment` — proving the secret was never changed.
-   - Re-derives every card independently using the same formula.
-   - Replays every round to confirm the reported outcomes match the on-chain derivation.
-   - If anything doesn't match, the session is flagged and the deposit is frozen.
+3. **Reveal (at cashout)** — The player submits `masterSecret`. The contract verifies the hash matches, re-derives every card, replays every round, recomputes the final balance, and rejects if anything doesn't match.
 
-**Neither party can cheat the randomness:** The player commits to the card sequence before seeing any cards. The contract derives the same sequence and verifies every outcome independently at cashout.
+### EIP-712 session authorization
 
-### EIP-712 Session Authorization
-
-Rather than requiring a transaction to authorize each round, the player signs a structured off-chain message once at session creation:
+Instead of a transaction per round, the player signs one structured off-chain message at session creation:
 
 ```
 Session(
@@ -82,48 +92,95 @@ Session(
 )
 ```
 
-This signature is domain-separated (tied to the specific contract address and chain ID), so it cannot be replayed on a different contract or network. The contract verifies the signature at cashout — if it doesn't match the session's player address, the cashout is rejected.
+The signature is domain-separated (bound to the contract address and chain ID) — it can't be replayed on another contract or network. The contract recovers the signer at cashout; if it doesn't match the session's player address, the cashout is rejected.
 
-This means:
 - No one else can cash out your session.
-- The session parameters (amount, expiry, commitment) are cryptographically locked to your wallet.
-- You pay no gas for authorization.
+- All session parameters are cryptographically bound to your wallet.
+- Zero gas cost for authorization.
 
-### On-Chain Replay Verification
+### On-chain replay verification
 
-The contract does not trust the frontend's reported outcomes. At cashout, it independently:
+The contract never trusts the frontend's reported outcomes. At cashout it independently:
 
-1. Re-derives `currentCard` and `nextCard` for every round using `masterSecret`.
-2. Re-evaluates whether each guess was correct.
-3. Re-computes the running balance from scratch.
-4. Compares the final balance against the player's submitted round history.
+1. Re-derives every card from `masterSecret`.
+2. Re-evaluates every guess.
+3. Recomputes the running balance from the deposit amount.
+4. Rejects if the result doesn't match the submitted history.
 
-If the player reports a win that was actually a loss (or inflates a bet amount), the contract catches it. The player cannot report false results.
+A player cannot fabricate wins, inflate bets, or omit losing rounds.
 
-### House Solvency Check
+---
 
-When you deposit, the contract checks that the house balance is at least `2 × depositAmount`. This guarantees the contract can always pay out even if every round is a win. You cannot open a session if the contract lacks the funds to honor it.
+## Learnings
 
-### Reentrancy Protection
+**Sessions over single rounds.** The first version was one deposit, one round, done. It worked but the UX was terrible and gas was too much per play. Then I redesiged it around sessions — deposit once, play unlimited rounds off-chain, cash out once.
 
-The `cashOut` function is protected by OpenZeppelin's `nonReentrant` guard, preventing any reentrancy attack during the ETH transfer to the player.
+**VRF vs commit/reveal.** Chainlink VRF would give provably random cards from an external oracle, but it requires an on-chain write per round — too slow and too expensive. Commit/reveal locks the full card sequence on-chain before play starts. It's trustless and costs nothing extra per round. The tradeoff is the randomness quality depends on the browser's RNG rather than an external oracle.
 
-### Summary
+**EIP-712 killed the transaction problem.** Early on each round needed two transactions. Unusable. Session signatures let players authorize an entire session upfront — all rounds happen off-chain, and one final transaction settles everything.
 
-| Guarantee | Mechanism |
-|-----------|-----------|
-| Cards can't be manipulated after deposit | Commit/reveal — secret hashed on-chain before any card is shown |
-| Player can't fake round outcomes | Contract re-derives all cards and replays all rounds on-chain at cashout |
-| Only the player can cash out | EIP-712 signature tied to player's wallet address |
-| House can always pay | Solvency check enforced at deposit time |
-| No reentrancy exploits | `nonReentrant` modifier on cashout |
-| No trusted intermediary | All verification is on-chain; no server or oracle required |
+**Tooling matters.** Started on Base Sepolia. Slow RPCs, bad block explorer. Moved to Circle Arc Testnet and the development loop got noticeably faster.
+
+**Trustless means no escape hatch.** Every guarantee has to be provable from the contract alone — no admin override, no support ticket. Designing around that constraint changed how I think about building software.
+
+---
+
+## Running It Yourself
+
+### Prerequisites
+
+- [Foundry](https://getfoundry.sh)
+- Node.js v18+
+- A wallet funded with Arc Testnet USDC
+
+### 1. Clone & install
+
+```bash
+git clone https://github.com/chelsea-zhao-1/higher-or-lower.git
+cd "higher-or-lower"
+
+cd contracts && npm install && forge build
+cd ../frontend && npm install
+```
+
+### 2. Configure environment
+
+Create `contracts/.env`:
+
+```env
+PRIVATE_KEY=0xYOUR_DEPLOYER_KEY
+ARC_TESTNET_RPC=https://rpc.testnet.arc.network
+```
+
+### 3. Deploy the contract
+
+```bash
+cd contracts
+forge script script/DeploySessionGame.s.sol --rpc-url arc_testnet --broadcast
+```
+
+Update `SESSION_GAME_ADDRESS` in `frontend/src/constants/contract.js`, then seed the house bankroll:
+
+```bash
+cast send <CONTRACT_ADDRESS> "depositHouse()" --value <AMOUNT_IN_WEI> \
+  --rpc-url https://rpc.testnet.arc.network --private-key $PRIVATE_KEY
+```
+
+The house balance must be at least 2× any player's deposit for sessions to open.
+
+### 4. Run the frontend
+
+```bash
+cd frontend
+npm run dev       # http://localhost:5173
+npm run build
+npx vercel --prod
+```
 
 ---
 
 ## Tech Stack
 
-- **Contracts:** Solidity + [Foundry](https://getfoundry.sh)
-- **Frontend:** React + [ethers.js v6](https://docs.ethers.org/v6/)
-- **Network:** Arc Testnet (chainId 5042002)
-- **Standards:** EIP-712 typed structured data signing, OpenZeppelin ReentrancyGuard
+- **Contracts:** Solidity 0.8.x + Foundry + OpenZeppelin (EIP-712, ReentrancyGuard, Ownable)
+- **Frontend:** React 18 + Vite + ethers.js v6
+- **Network:** Circle Arc Testnet (chain ID 5042002)
