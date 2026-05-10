@@ -30,6 +30,43 @@ function deriveCard(secret, blockHash, nonce) {
   return Number(BigInt(packed) % 13n) + 1;
 }
 
+function parseError(e, ctx = {}) {
+  // User cancelled in MetaMask
+  if (e.code === "ACTION_REJECTED" || e.code === 4001) {
+    return "Transaction cancelled.";
+  }
+
+  // ethers v6 decodes custom errors into e.revert.name
+  const name = e.revert?.name ?? e.reason ?? "";
+
+  switch (name) {
+    case "InsufficientHouseFunds":
+      return ctx.houseBalance !== undefined
+        ? `Your bet exceeds the house pot. House balance: ${parseFloat(ctx.houseBalance).toFixed(2)} USDC — try a smaller bet.`
+        : "Your bet exceeds the house pot. Try a smaller bet.";
+    case "InvalidBet":
+      return "Bet amount must be greater than 0.";
+    case "NothingToClaim":
+      return "No winnings to claim right now.";
+    case "BlockHashExpired":
+      return "Too many blocks passed since your commit (>256 blocks). Use 'Refund Stuck Game' to recover your bet.";
+    case "TooEarlyToReveal":
+      return "Please wait one more block before submitting your guess.";
+    case "InvalidReveal":
+      return "Secret doesn't match the on-chain commitment. This is a bug — please report it.";
+    case "WrongGameStatus":
+      return "This game is not in the expected state. Try refreshing.";
+    case "NotYourGame":
+      return "This game doesn't belong to your connected wallet address.";
+    case "TransferFailed":
+      return "On-chain transfer failed. The contract couldn't send funds.";
+    case "NotTimedOut":
+      return "The game hasn't timed out yet. You can request a refund after 2 hours or 256 blocks.";
+    default:
+      return e.reason ?? e.message ?? "An unknown error occurred.";
+  }
+}
+
 export function useGame() {
   const [address,         setAddress]         = useState(null);
   const [status,          setStatus]           = useState(GAME_STATUS.IDLE);
@@ -93,7 +130,7 @@ export function useGame() {
       setHouseBalance(ethers.formatUnits(bal, NATIVE_CURRENCY.decimals));
       setPendingWinnings(ethers.formatUnits(pending, NATIVE_CURRENCY.decimals));
     } catch (e) {
-      setError(e.message);
+      setError(parseError(e));
     }
   }, []);
 
@@ -108,12 +145,28 @@ export function useGame() {
     setStatus(GAME_STATUS.WAITING_CURRENT);
 
     try {
+      const betWei = ethers.parseUnits(String(betUsdc), NATIVE_CURRENCY.decimals);
+
+      if (betWei === 0n) {
+        setError("Bet amount must be greater than 0.");
+        setStatus(GAME_STATUS.IDLE);
+        return;
+      }
+
+      // Pre-flight: check house can cover a win before sending a tx that will revert
+      const houseBal = await contract.houseBalance();
+      if (betWei > houseBal) {
+        const houseFormatted = parseFloat(ethers.formatUnits(houseBal, NATIVE_CURRENCY.decimals)).toFixed(2);
+        setError(`Your bet (${betUsdc} USDC) exceeds the house pot (${houseFormatted} USDC). Try a smaller bet.`);
+        setStatus(GAME_STATUS.IDLE);
+        return;
+      }
+
       const secretBytes  = ethers.randomBytes(32);
       const secret       = BigInt(ethers.hexlify(secretBytes));
       const commitment   = ethers.solidityPackedKeccak256(["uint256"], [secret]);
       secretRef.current  = secret;
 
-      const betWei  = ethers.parseUnits(betUsdc.toString(), NATIVE_CURRENCY.decimals);
       const tx      = await contract.startGame(commitment, { value: betWei });
       const receipt = await tx.wait();
 
@@ -133,10 +186,10 @@ export function useGame() {
       setCurrentSuit(randomSuit());
       setStatus(GAME_STATUS.AWAITING_GUESS);
     } catch (e) {
-      setError(e.reason ?? e.message);
+      setError(parseError(e, { houseBalance }));
       setStatus(GAME_STATUS.IDLE);
     }
-  }, []);
+  }, [houseBalance]);
 
   // ─── Submit guess ─────────────────────────────────────────────────────────
 
@@ -181,7 +234,7 @@ export function useGame() {
       }
       setStatus(GAME_STATUS.COMPLETE);
     } catch (e) {
-      setError(e.reason ?? e.message);
+      setError(parseError(e));
       setStatus(GAME_STATUS.AWAITING_GUESS);
     }
   }, [gameId]);
@@ -199,7 +252,7 @@ export function useGame() {
       const pending = await contract.pendingWithdrawals(addr);
       setPendingWinnings(ethers.formatUnits(pending, NATIVE_CURRENCY.decimals));
     } catch (e) {
-      setError(e.reason ?? e.message);
+      setError(parseError(e));
     }
   }, []);
 
