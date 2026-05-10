@@ -2,7 +2,7 @@
 export const CONTRACT_ADDRESS = "0xF525Ed0a987A1aBD5FE9DBC22269C44Db66e1B8B";
 
 // SessionGame — deployed to Arc Testnet
-export const SESSION_GAME_ADDRESS = "0xfcb67FaB4E703dA58FcD774cf26BBD3C7e1E84BD";
+export const SESSION_GAME_ADDRESS = "0x2cD20aD849DBc83fd29E23A5Ac898105Cf8143bA";
 
 export const ABI = [
   // View
@@ -46,10 +46,10 @@ export const SESSION_GAME_ABI = [
   "function houseBalance() external view returns (uint256)",
   "function domainSeparator() external view returns (bytes32)",
   "function nextSessionId() external view returns (uint256)",
-  "function sessions(uint256) external view returns (address player, uint256 depositAmount, uint256 maxBetPerRound, uint256 expiry, bytes32 commitment, uint8 status)",
+  "function sessions(uint256) external view returns (address player, uint256 depositAmount, uint256 expiry, bytes32 commitment, uint8 status)",
 
   // Player actions
-  "function deposit(bytes32 commitment, uint256 maxBetPerRound, uint256 expiry) external payable returns (uint256 sessionId)",
+  "function deposit(bytes32 commitment, uint256 expiry) external payable returns (uint256 sessionId)",
   "function cashOut(uint256 sessionId, uint256 masterSecret, (uint256 roundNum, uint256 betAmount, bool guessHigher)[] rounds, bytes sessionSig) external",
 
   // Owner
@@ -62,14 +62,12 @@ export const SESSION_GAME_ABI = [
   "error SessionNotActive()",
   "error InvalidSecret()",
   "error InvalidSignature()",
-  "error BetExceedsMax()",
   "error InsufficientHouseFunds()",
   "error TransferFailed()",
 
   // Events
   "event SessionOpened(uint256 indexed sessionId, address indexed player, uint256 depositAmount, uint256 expiry)",
   "event SessionClosed(uint256 indexed sessionId, address indexed player, uint256 payout)",
-  "event SessionFlagged(uint256 indexed sessionId, address indexed player, string reason)",
 ];
 
 // Circle Arc Testnet

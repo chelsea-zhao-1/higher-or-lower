@@ -9,12 +9,11 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
     using ECDSA for bytes32;
 
-    enum SessionStatus { ACTIVE, CASHED_OUT, FLAGGED }
+    enum SessionStatus { ACTIVE, CASHED_OUT }
 
     struct Session {
         address player;
         uint256 depositAmount;
-        uint256 maxBetPerRound;
         uint256 expiry;
         bytes32 commitment;
         SessionStatus status;
@@ -27,7 +26,7 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
     }
 
     bytes32 private constant SESSION_TYPEHASH = keccak256(
-        "Session(uint256 sessionId,address player,uint256 depositAmount,uint256 maxBetPerRound,uint256 expiry,bytes32 commitment)"
+        "Session(uint256 sessionId,address player,uint256 depositAmount,uint256 expiry,bytes32 commitment)"
     );
 
     mapping(uint256 => Session) public sessions;
@@ -35,7 +34,6 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
 
     event SessionOpened(uint256 indexed sessionId, address indexed player, uint256 depositAmount, uint256 expiry);
     event SessionClosed(uint256 indexed sessionId, address indexed player, uint256 payout);
-    event SessionFlagged(uint256 indexed sessionId, address indexed player, string reason);
     event HouseDeposit(uint256 amount);
     event HouseWithdraw(uint256 amount);
 
@@ -44,7 +42,6 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
     error SessionNotActive();
     error InvalidSecret();
     error InvalidSignature();
-    error BetExceedsMax();
     error InsufficientHouseFunds();
     error TransferFailed();
 
@@ -54,7 +51,6 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
 
     function deposit(
         bytes32 commitment,
-        uint256 maxBetPerRound,
         uint256 expiry
     ) external payable returns (uint256 sessionId) {
         if (msg.value == 0) revert InvalidDeposit();
@@ -66,7 +62,6 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
         sessions[sessionId] = Session({
             player: msg.sender,
             depositAmount: msg.value,
-            maxBetPerRound: maxBetPerRound,
             expiry: expiry,
             commitment: commitment,
             status: SessionStatus.ACTIVE
@@ -92,22 +87,16 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
             sessionId,
             session.player,
             session.depositAmount,
-            session.maxBetPerRound,
             session.expiry,
             session.commitment
         ));
         address recovered = _hashTypedDataV4(structHash).recover(sessionSig);
         if (recovered != session.player) revert InvalidSignature();
 
-        // Replay all rounds; flag and freeze deposit if any violation found
+        // Replay all rounds
         int256 runningBalance = int256(session.depositAmount);
         for (uint256 i = 0; i < rounds.length; i++) {
             RoundResult calldata r = rounds[i];
-            if (r.betAmount > session.maxBetPerRound) {
-                session.status = SessionStatus.FLAGGED;
-                emit SessionFlagged(sessionId, session.player, "bet exceeds max");
-                return;
-            }
 
             uint8 curr = _deriveCard(masterSecret, r.roundNum, 0);
             uint8 next = _deriveCard(masterSecret, r.roundNum, 1);

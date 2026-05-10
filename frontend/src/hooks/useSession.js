@@ -61,7 +61,6 @@ export function useSession() {
   const [status,          setStatus]           = useState(SESSION_STATUS.IDLE);
   const [sessionId,       setSessionId]        = useState(null);
   const [offChainBalance, setOffChainBalance]  = useState(null); // in wei as BigInt
-  const [maxBetPerRound,  setMaxBetPerRound]   = useState(null); // in wei as BigInt
   const [currentCard,     setCurrentCard]      = useState(null);
   const [currentSuit,     setCurrentSuit]      = useState("♠");
   const [roundNum,        setRoundNum]         = useState(0);
@@ -75,7 +74,7 @@ export function useSession() {
   const providerRef     = useRef(null);
   const masterSecretRef = useRef(null); // BigInt
   const sessionSigRef   = useRef(null); // bytes string
-  const depositParamsRef = useRef(null); // { amount, maxBet, expiry, commitment }
+  const depositParamsRef = useRef(null); // { amount, expiry, commitment }
   const roundNumRef     = useRef(0);
   const roundHistoryRef = useRef([]);
   const offChainBalanceRef = useRef(null);
@@ -130,7 +129,7 @@ export function useSession() {
 
   // ─── Deposit + sign ───────────────────────────────────────────────────────
 
-  const deposit = useCallback(async (amountEth, maxBetEth, expiryHours) => {
+  const deposit = useCallback(async (amountEth, expiryHours) => {
     const contract = contractRef.current;
     const provider = providerRef.current;
     if (!contract || !provider) return;
@@ -139,7 +138,6 @@ export function useSession() {
 
     try {
       const amountWei  = ethers.parseUnits(String(amountEth), NATIVE_CURRENCY.decimals);
-      const maxBetWei  = ethers.parseUnits(String(maxBetEth), NATIVE_CURRENCY.decimals);
       const expiry     = Math.floor(Date.now() / 1000) + expiryHours * 3600;
 
       const secretBytes  = ethers.randomBytes(32);
@@ -154,7 +152,7 @@ export function useSession() {
         return;
       }
 
-      const tx      = await contract.deposit(commitment, maxBetWei, expiry, { value: amountWei });
+      const tx      = await contract.deposit(commitment, expiry, { value: amountWei });
       const receipt = await tx.wait();
 
       let newSessionId = null;
@@ -166,7 +164,7 @@ export function useSession() {
       }
 
       masterSecretRef.current = masterSecret;
-      depositParamsRef.current = { amount: amountWei, maxBet: maxBetWei, expiry, commitment };
+      depositParamsRef.current = { amount: amountWei, expiry, commitment };
 
       // Immediately request EIP-712 session signature
       setStatus(SESSION_STATUS.SIGNING);
@@ -182,22 +180,20 @@ export function useSession() {
         },
         types: {
           Session: [
-            { name: "sessionId",      type: "uint256" },
-            { name: "player",         type: "address" },
-            { name: "depositAmount",  type: "uint256" },
-            { name: "maxBetPerRound", type: "uint256" },
-            { name: "expiry",         type: "uint256" },
-            { name: "commitment",     type: "bytes32" },
+            { name: "sessionId",     type: "uint256" },
+            { name: "player",        type: "address" },
+            { name: "depositAmount", type: "uint256" },
+            { name: "expiry",        type: "uint256" },
+            { name: "commitment",    type: "bytes32" },
           ],
         },
         primaryType: "Session",
         message: {
-          sessionId:      newSessionId.toString(),
-          player:         addr,
-          depositAmount:  amountWei.toString(),
-          maxBetPerRound: maxBetWei.toString(),
-          expiry:         expiry.toString(),
-          commitment:     commitment,
+          sessionId:     newSessionId.toString(),
+          player:        addr,
+          depositAmount: amountWei.toString(),
+          expiry:        expiry.toString(),
+          commitment:    commitment,
         },
       };
 
@@ -210,7 +206,7 @@ export function useSession() {
       setSessionId(newSessionId);
       setOffChainBalance(amountWei);
       offChainBalanceRef.current = amountWei;
-      setMaxBetPerRound(maxBetWei);
+
       roundNumRef.current = 0;
       roundHistoryRef.current = [];
       setRoundNum(0);
@@ -351,7 +347,6 @@ export function useSession() {
     status,
     sessionId,
     offChainBalance,
-    maxBetPerRound,
     currentCard,
     currentSuit,
     roundNum,

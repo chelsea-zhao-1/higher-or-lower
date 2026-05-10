@@ -53,15 +53,14 @@ function BalanceHUD({ offChainBalance, roundNum, onCashOut }) {
 
 export default function GameBoard({ state }) {
   const {
-    status, offChainBalance, maxBetPerRound, currentCard, currentSuit,
+    status, offChainBalance, currentCard, currentSuit,
     roundNum, lastResult, finalPayout, houseEth, error,
     deposit, startRound, submitGuess, cashOut, reset,
   } = state;
 
-  const [amountInput,  setAmountInput]  = useState("1");
-  const [maxBetInput,  setMaxBetInput]  = useState("0.2");
-  const [expiryHours,  setExpiryHours]  = useState(4);
-  const [betInput,     setBetInput]     = useState("0.1");
+  const [amountInput, setAmountInput] = useState("1");
+  const [expiryHours, setExpiryHours] = useState(4);
+  const [betInput,    setBetInput]    = useState("0.1");
 
   // ─── Deposit screen ───────────────────────────────────────────────────────
 
@@ -82,16 +81,6 @@ export default function GameBoard({ state }) {
             <span style={styles.unit}>USDC</span>
           </div>
 
-          <label style={styles.fieldLabel}>Max bet per round (USDC)</label>
-          <div style={styles.inputRow}>
-            <input
-              type="number" min="0.01" step="0.01"
-              value={maxBetInput} onChange={(e) => setMaxBetInput(e.target.value)}
-              style={styles.input}
-            />
-            <span style={styles.unit}>USDC</span>
-          </div>
-
           <label style={styles.fieldLabel}>Session length</label>
           <div style={styles.expiryRow}>
             {[1, 4, 24].map((h) => (
@@ -106,7 +95,7 @@ export default function GameBoard({ state }) {
           </div>
         </div>
 
-        <button style={styles.btnPrimary} onClick={() => deposit(amountInput, maxBetInput, expiryHours)}>
+        <button style={styles.btnPrimary} onClick={() => deposit(amountInput, expiryHours)}>
           Deposit & Start Session
         </button>
         <p style={styles.sub}>2 MetaMask interactions: deposit tx + session signature</p>
@@ -126,7 +115,6 @@ export default function GameBoard({ state }) {
   // ─── Session active: between rounds ──────────────────────────────────────
 
   if (status === SESSION_STATUS.SESSION_ACTIVE) {
-    const maxBetFormatted = fmt(maxBetPerRound);
     const { playerWon, isTie, nextCard, nextSuit } = lastResult ?? {};
 
     return (
@@ -152,13 +140,12 @@ export default function GameBoard({ state }) {
         <h2 style={styles.heading}>Next Round</h2>
         <div style={styles.inputRow}>
           <input
-            type="number" min="0.01" step="0.01" max={maxBetFormatted}
+            type="number" min="0.01" step="0.01"
             value={betInput} onChange={(e) => setBetInput(e.target.value)}
             style={styles.input}
           />
           <span style={styles.unit}>USDC</span>
         </div>
-        <p style={styles.sub}>Max per round: {maxBetFormatted} USDC</p>
 
         <button style={styles.btnPrimary} onClick={() => startRound(betInput)}>
           Draw Card

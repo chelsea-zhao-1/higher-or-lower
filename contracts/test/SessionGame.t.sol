@@ -34,39 +34,29 @@ contract SessionGameTest is Test {
         uint256 sessionId,
         address _player,
         uint256 depositAmount,
-        uint256 maxBetPerRound,
         uint256 expiry,
         bytes32 commitment
     ) internal view returns (bytes memory) {
         bytes32 SESSION_TYPEHASH = keccak256(
-            "Session(uint256 sessionId,address player,uint256 depositAmount,uint256 maxBetPerRound,uint256 expiry,bytes32 commitment)"
+            "Session(uint256 sessionId,address player,uint256 depositAmount,uint256 expiry,bytes32 commitment)"
         );
         bytes32 structHash = keccak256(abi.encode(
-            SESSION_TYPEHASH, sessionId, _player, depositAmount, maxBetPerRound, expiry, commitment
+            SESSION_TYPEHASH, sessionId, _player, depositAmount, expiry, commitment
         ));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", game.domainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, digest);
         return abi.encodePacked(r, s, v);
     }
 
-    function _deposit(
-        uint256 secret,
-        uint256 amount,
-        uint256 maxBet,
-        uint256 expiry
-    ) internal returns (uint256 sessionId) {
+    function _deposit(uint256 secret, uint256 amount, uint256 expiry) internal returns (uint256 sessionId) {
         vm.prank(player);
-        sessionId = game.deposit{value: amount}(_commitment(secret), maxBet, expiry);
+        sessionId = game.deposit{value: amount}(_commitment(secret), expiry);
     }
 
-    function _playerSig(
-        uint256 sessionId,
-        uint256 amount,
-        uint256 maxBet,
-        uint256 expiry,
-        uint256 secret
-    ) internal view returns (bytes memory) {
-        return _makeSig(playerKey, sessionId, player, amount, maxBet, expiry, _commitment(secret));
+    function _playerSig(uint256 sessionId, uint256 amount, uint256 expiry, uint256 secret)
+        internal view returns (bytes memory)
+    {
+        return _makeSig(playerKey, sessionId, player, amount, expiry, _commitment(secret));
     }
 
     // ─── deposit ──────────────────────────────────────────────────────────────
@@ -76,21 +66,20 @@ contract SessionGameTest is Test {
         vm.prank(player);
         vm.expectEmit(true, true, false, true);
         emit SessionGame.SessionOpened(0, player, 1 ether, expiry);
-        game.deposit{value: 1 ether}(_commitment(12345), 0.2 ether, expiry);
+        game.deposit{value: 1 ether}(_commitment(12345), expiry);
     }
 
     function test_deposit_storesSessionData() public {
         uint256 expiry = block.timestamp + 1 hours;
         bytes32 commitment = _commitment(12345);
         vm.prank(player);
-        uint256 sessionId = game.deposit{value: 1 ether}(commitment, 0.2 ether, expiry);
+        uint256 sessionId = game.deposit{value: 1 ether}(commitment, expiry);
 
-        (address p, uint256 dep, uint256 maxBet, uint256 exp, bytes32 comm, SessionGame.SessionStatus status) =
+        (address p, uint256 dep, uint256 exp, bytes32 comm, SessionGame.SessionStatus status) =
             game.sessions(sessionId);
 
         assertEq(p, player);
         assertEq(dep, 1 ether);
-        assertEq(maxBet, 0.2 ether);
         assertEq(exp, expiry);
         assertEq(comm, commitment);
         assertEq(uint8(status), uint8(SessionGame.SessionStatus.ACTIVE));
@@ -99,27 +88,27 @@ contract SessionGameTest is Test {
     function test_deposit_reverts_zeroValue() public {
         vm.prank(player);
         vm.expectRevert(SessionGame.InvalidDeposit.selector);
-        game.deposit{value: 0}(_commitment(1), 0.1 ether, block.timestamp + 1 hours);
+        game.deposit{value: 0}(_commitment(1), block.timestamp + 1 hours);
     }
 
     function test_deposit_reverts_expiredExpiry() public {
         vm.prank(player);
         vm.expectRevert(SessionGame.SessionExpired.selector);
-        game.deposit{value: 1 ether}(_commitment(1), 0.1 ether, block.timestamp - 1);
+        game.deposit{value: 1 ether}(_commitment(1), block.timestamp - 1);
     }
 
     function test_deposit_reverts_insufficientHouse() public {
         vm.deal(address(game), 0);
         vm.prank(player);
         vm.expectRevert(SessionGame.InsufficientHouseFunds.selector);
-        game.deposit{value: 1 ether}(_commitment(1), 0.1 ether, block.timestamp + 1 hours);
+        game.deposit{value: 1 ether}(_commitment(1), block.timestamp + 1 hours);
     }
 
     function test_deposit_incrementsSessionId() public {
         uint256 expiry = block.timestamp + 1 hours;
         vm.startPrank(player);
-        uint256 id0 = game.deposit{value: 0.1 ether}(_commitment(1), 0.05 ether, expiry);
-        uint256 id1 = game.deposit{value: 0.1 ether}(_commitment(2), 0.05 ether, expiry);
+        uint256 id0 = game.deposit{value: 0.1 ether}(_commitment(1), expiry);
+        uint256 id1 = game.deposit{value: 0.1 ether}(_commitment(2), expiry);
         vm.stopPrank();
         assertEq(id0, 0);
         assertEq(id1, 1);
@@ -131,8 +120,8 @@ contract SessionGameTest is Test {
         uint256 secret = 12345;
         uint256 amount = 1 ether;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, amount, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, amount, 0.2 ether, expiry, secret);
+        uint256 sessionId = _deposit(secret, amount, expiry);
+        bytes memory sig = _playerSig(sessionId, amount, expiry, secret);
 
         SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](0);
         uint256 balBefore = player.balance;
@@ -146,10 +135,9 @@ contract SessionGameTest is Test {
     function test_cashOut_threeRounds_correctBalance() public {
         uint256 secret = 99999;
         uint256 amount = 1 ether;
-        uint256 maxBet = 0.2 ether;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, amount, maxBet, expiry);
-        bytes memory sig = _playerSig(sessionId, amount, maxBet, expiry, secret);
+        uint256 sessionId = _deposit(secret, amount, expiry);
+        bytes memory sig = _playerSig(sessionId, amount, expiry, secret);
 
         SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](3);
         int256 expected = int256(amount);
@@ -157,9 +145,8 @@ contract SessionGameTest is Test {
         for (uint256 i = 0; i < 3; i++) {
             uint8 curr = _deriveCard(secret, i, 0);
             uint8 next = _deriveCard(secret, i, 1);
-            bool guessHigher = next >= curr; // win or tie
+            bool guessHigher = next >= curr;
             rounds[i] = SessionGame.RoundResult({roundNum: i, betAmount: 0.1 ether, guessHigher: guessHigher});
-
             if (next > curr) expected += int256(uint256(0.1 ether));
         }
 
@@ -173,15 +160,12 @@ contract SessionGameTest is Test {
     function test_cashOut_lossClampedAtZero() public {
         uint256 secret = 12345;
         uint256 amount = 0.1 ether;
-        uint256 maxBet = 0.2 ether;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, amount, maxBet, expiry);
-        bytes memory sig = _playerSig(sessionId, amount, maxBet, expiry, secret);
+        uint256 sessionId = _deposit(secret, amount, expiry);
+        bytes memory sig = _playerSig(sessionId, amount, expiry, secret);
 
         uint8 curr = _deriveCard(secret, 0, 0);
         uint8 next = _deriveCard(secret, 0, 1);
-
-        // Only run this test if there's a non-tie (so we can guarantee a loss)
         vm.assume(curr != next);
 
         bool losingGuess = next > curr ? false : true;
@@ -192,48 +176,42 @@ contract SessionGameTest is Test {
         vm.prank(player);
         game.cashOut(sessionId, secret, rounds, sig);
 
-        // Balance can't go below 0, payout = 0 (lost 0.1 ether, clamped)
-        assertEq(player.balance, balBefore);
+        assertEq(player.balance, balBefore); // clamped to 0
     }
 
     function test_cashOut_tieRound_balanceUnchanged() public {
-        // Find a secret/round that produces a tie
         uint256 secret;
-        uint256 roundNum;
         bool foundTie;
         for (uint256 s = 1; s < 100; s++) {
-            uint8 curr = _deriveCard(s, 0, 0);
-            uint8 next = _deriveCard(s, 0, 1);
-            if (curr == next) {
+            if (_deriveCard(s, 0, 0) == _deriveCard(s, 0, 1)) {
                 secret = s;
-                roundNum = 0;
                 foundTie = true;
                 break;
             }
         }
-        if (!foundTie) return; // skip if no tie found in range
+        if (!foundTie) return;
 
         uint256 amount = 1 ether;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, amount, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, amount, 0.2 ether, expiry, secret);
+        uint256 sessionId = _deposit(secret, amount, expiry);
+        bytes memory sig = _playerSig(sessionId, amount, expiry, secret);
 
         SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](1);
-        rounds[0] = SessionGame.RoundResult({roundNum: roundNum, betAmount: 0.2 ether, guessHigher: true});
+        rounds[0] = SessionGame.RoundResult({roundNum: 0, betAmount: 0.2 ether, guessHigher: true});
 
         uint256 balBefore = player.balance;
         vm.prank(player);
         game.cashOut(sessionId, secret, rounds, sig);
 
-        assertEq(player.balance, balBefore + amount); // tie = no change
+        assertEq(player.balance, balBefore + amount);
     }
 
     function test_cashOut_emitsSessionClosed() public {
         uint256 secret = 12345;
         uint256 amount = 1 ether;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, amount, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, amount, 0.2 ether, expiry, secret);
+        uint256 sessionId = _deposit(secret, amount, expiry);
+        bytes memory sig = _playerSig(sessionId, amount, expiry, secret);
 
         SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](0);
         vm.prank(player);
@@ -246,22 +224,21 @@ contract SessionGameTest is Test {
 
     function test_cashOut_reverts_badSecret() public {
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(12345, 1 ether, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, 1 ether, 0.2 ether, expiry, 12345);
+        uint256 sessionId = _deposit(12345, 1 ether, expiry);
+        bytes memory sig = _playerSig(sessionId, 1 ether, expiry, 12345);
 
         SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](0);
         vm.prank(player);
         vm.expectRevert(SessionGame.InvalidSecret.selector);
-        game.cashOut(sessionId, 99999, rounds, sig); // wrong secret
+        game.cashOut(sessionId, 99999, rounds, sig);
     }
 
     function test_cashOut_reverts_invalidSig() public {
         uint256 secret = 12345;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, 1 ether, 0.2 ether, expiry);
+        uint256 sessionId = _deposit(secret, 1 ether, expiry);
 
-        uint256 strangerKey = 0xBEEF;
-        bytes memory badSig = _makeSig(strangerKey, sessionId, player, 1 ether, 0.2 ether, expiry, _commitment(secret));
+        bytes memory badSig = _makeSig(0xBEEF, sessionId, player, 1 ether, expiry, _commitment(secret));
 
         SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](0);
         vm.prank(player);
@@ -272,8 +249,8 @@ contract SessionGameTest is Test {
     function test_cashOut_reverts_expired() public {
         uint256 secret = 12345;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, 1 ether, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, 1 ether, 0.2 ether, expiry, secret);
+        uint256 sessionId = _deposit(secret, 1 ether, expiry);
+        bytes memory sig = _playerSig(sessionId, 1 ether, expiry, secret);
 
         vm.warp(expiry + 1);
 
@@ -286,8 +263,8 @@ contract SessionGameTest is Test {
     function test_cashOut_reverts_alreadyCashedOut() public {
         uint256 secret = 12345;
         uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, 1 ether, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, 1 ether, 0.2 ether, expiry, secret);
+        uint256 sessionId = _deposit(secret, 1 ether, expiry);
+        bytes memory sig = _playerSig(sessionId, 1 ether, expiry, secret);
 
         SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](0);
         vm.prank(player);
@@ -296,74 +273,6 @@ contract SessionGameTest is Test {
         vm.prank(player);
         vm.expectRevert(SessionGame.SessionNotActive.selector);
         game.cashOut(sessionId, secret, rounds, sig);
-    }
-
-    // ─── cashOut — flagging ───────────────────────────────────────────────────
-
-    function test_cashOut_flagged_betExceedsMax() public {
-        uint256 secret = 12345;
-        uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, 1 ether, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, 1 ether, 0.2 ether, expiry, secret);
-
-        SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](1);
-        rounds[0] = SessionGame.RoundResult({roundNum: 0, betAmount: 0.5 ether, guessHigher: true});
-
-        vm.prank(player);
-        game.cashOut(sessionId, secret, rounds, sig); // no revert — deposit is frozen
-
-        (,,,,,SessionGame.SessionStatus status) = game.sessions(sessionId);
-        assertEq(uint8(status), uint8(SessionGame.SessionStatus.FLAGGED));
-    }
-
-    function test_cashOut_flagged_depositFrozen() public {
-        uint256 secret = 12345;
-        uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, 1 ether, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, 1 ether, 0.2 ether, expiry, secret);
-
-        SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](1);
-        rounds[0] = SessionGame.RoundResult({roundNum: 0, betAmount: 0.5 ether, guessHigher: true});
-
-        uint256 balBefore = player.balance;
-        vm.prank(player);
-        game.cashOut(sessionId, secret, rounds, sig);
-
-        assertEq(player.balance, balBefore); // no ETH transferred
-    }
-
-    function test_cashOut_flagged_emitsEvent() public {
-        uint256 secret = 12345;
-        uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, 1 ether, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, 1 ether, 0.2 ether, expiry, secret);
-
-        SessionGame.RoundResult[] memory rounds = new SessionGame.RoundResult[](1);
-        rounds[0] = SessionGame.RoundResult({roundNum: 0, betAmount: 0.5 ether, guessHigher: true});
-
-        vm.prank(player);
-        vm.expectEmit(true, true, false, false);
-        emit SessionGame.SessionFlagged(sessionId, player, "");
-        game.cashOut(sessionId, secret, rounds, sig);
-    }
-
-    function test_cashOut_flagged_cannotRetry() public {
-        uint256 secret = 12345;
-        uint256 expiry = block.timestamp + 1 hours;
-        uint256 sessionId = _deposit(secret, 1 ether, 0.2 ether, expiry);
-        bytes memory sig = _playerSig(sessionId, 1 ether, 0.2 ether, expiry, secret);
-
-        SessionGame.RoundResult[] memory badRounds = new SessionGame.RoundResult[](1);
-        badRounds[0] = SessionGame.RoundResult({roundNum: 0, betAmount: 0.5 ether, guessHigher: true});
-
-        vm.prank(player);
-        game.cashOut(sessionId, secret, badRounds, sig);
-
-        // Try again with valid rounds — should revert because status is FLAGGED
-        SessionGame.RoundResult[] memory goodRounds = new SessionGame.RoundResult[](0);
-        vm.prank(player);
-        vm.expectRevert(SessionGame.SessionNotActive.selector);
-        game.cashOut(sessionId, secret, goodRounds, sig);
     }
 
     // ─── Owner functions ──────────────────────────────────────────────────────
@@ -391,8 +300,7 @@ contract SessionGameTest is Test {
         game.withdrawHouse(0.1 ether);
     }
 
-    function test_houseBalance_reflectsDeposit() public {
-        uint256 bal = game.houseBalance();
-        assertEq(bal, 10 ether);
+    function test_houseBalance_reflectsDeposit() public view {
+        assertEq(game.houseBalance(), 10 ether);
     }
 }
