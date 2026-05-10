@@ -44,6 +44,8 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
     error InvalidSignature();
     error InsufficientHouseFunds();
     error TransferFailed();
+    error SessionNotExpired();
+    error NotYourSession();
 
     constructor() Ownable() EIP712("SessionGame", "1") {}
 
@@ -120,6 +122,20 @@ contract SessionGame is Ownable, ReentrancyGuard, EIP712 {
         if (!ok) revert TransferFailed();
 
         emit SessionClosed(sessionId, session.player, payout);
+    }
+
+    function refundExpired(uint256 sessionId) external nonReentrant {
+        Session storage session = sessions[sessionId];
+        if (session.status != SessionStatus.ACTIVE) revert SessionNotActive();
+        if (block.timestamp <= session.expiry) revert SessionNotExpired();
+        if (msg.sender != session.player) revert NotYourSession();
+
+        session.status = SessionStatus.CASHED_OUT;
+        uint256 refund = session.depositAmount;
+        (bool ok,) = session.player.call{value: refund}("");
+        if (!ok) revert TransferFailed();
+
+        emit SessionClosed(sessionId, session.player, refund);
     }
 
     // ─── Internal ─────────────────────────────────────────────────────────────

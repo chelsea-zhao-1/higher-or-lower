@@ -18,6 +18,8 @@ export const SESSION_STATUS = {
   CASHING_OUT: "cashing_out",
   CASHED_OUT: "cashed_out",
   FLAGGED: "flagged",
+  SESSION_EXPIRED: "session_expired",
+  REFUNDING: "refunding",
 };
 
 const CARD_NAMES = ["", "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
@@ -52,8 +54,51 @@ function parseError(e) {
     case "BetExceedsMax":         return "A bet exceeded the max-per-round limit. Session flagged.";
     case "InsufficientHouseFunds": return "House doesn't have enough funds to cover this deposit.";
     case "TransferFailed":        return "On-chain transfer failed.";
+    case "SessionNotExpired":     return "Session hasn't expired yet — you can still cash out normally.";
+    case "NotYourSession":        return "This session doesn't belong to your wallet.";
     default: return e.reason ?? e.message ?? "An unknown error occurred.";
   }
+}
+
+const LS_KEY = (addr) => `sg_session_${addr.toLowerCase()}`;
+
+function saveSession(addr, data) {
+  try {
+    localStorage.setItem(LS_KEY(addr), JSON.stringify({
+      sessionId:      data.sessionId,
+      masterSecret:   data.masterSecret.toString(16).padStart(64, "0"),
+      sessionSig:     data.sessionSig,
+      depositAmount:  data.depositAmount.toString(),
+      expiry:         data.expiry,
+      commitment:     data.commitment,
+      roundHistory:   data.roundHistory.map((r) => ({ ...r, betAmount: r.betAmount.toString() })),
+      roundNum:       data.roundNum,
+      offChainBalance: data.offChainBalance.toString(),
+    }));
+  } catch {}
+}
+
+function loadSession(addr) {
+  try {
+    const raw = localStorage.getItem(LS_KEY(addr));
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    return {
+      sessionId:      d.sessionId,
+      masterSecret:   BigInt("0x" + d.masterSecret),
+      sessionSig:     d.sessionSig,
+      depositAmount:  BigInt(d.depositAmount),
+      expiry:         d.expiry,
+      commitment:     d.commitment,
+      roundHistory:   d.roundHistory.map((r) => ({ ...r, betAmount: BigInt(r.betAmount) })),
+      roundNum:       d.roundNum,
+      offChainBalance: BigInt(d.offChainBalance),
+    };
+  } catch { return null; }
+}
+
+function clearSession(addr) {
+  try { localStorage.removeItem(LS_KEY(addr)); } catch {}
 }
 
 export function useSession() {
@@ -69,6 +114,8 @@ export function useSession() {
   const [finalPayout,     setFinalPayout]      = useState(null);
   const [houseEth,        setHouseEth]         = useState(null);
   const [error,           setError]            = useState(null);
+  const [stuckSessions,  setStuckSessions]  = useState([]); // [{sessionId, depositAmount, expiry}]
+  const [scanning,       setScanning]       = useState(false);
 
   const contractRef     = useRef(null);
   const providerRef     = useRef(null);
@@ -79,6 +126,8 @@ export function useSession() {
   const roundHistoryRef = useRef([]);
   const offChainBalanceRef = useRef(null);
   const currentBetRef   = useRef(null); // wei BigInt for the current round
+  const addressRef      = useRef(null);
+  const sessionIdRef    = useRef(null);
 
   // ─── Wallet ──────────────────────────────────────────────────────────────
 
@@ -119,6 +168,37 @@ export function useSession() {
 
       const contract = new ethers.Contract(SESSION_GAME_ADDRESS, SESSION_GAME_ABI, signer);
       contractRef.current = contract;
+      addressRef.current = addr;
+
+      // Restore saved session if one exists
+      const saved = loadSession(addr);
+      if (saved) {
+        masterSecretRef.current     = saved.masterSecret;
+        sessionSigRef.current       = saved.sessionSig;
+        depositParamsRef.current    = { amount: saved.depositAmount, expiry: saved.expiry, commitment: saved.commitment };
+        roundNumRef.current         = saved.roundNum;
+        roundHistoryRef.current     = saved.roundHistory;
+        offChainBalanceRef.current  = saved.offChainBalance;
+        sessionIdRef.current        = saved.sessionId;
+        setSessionId(saved.sessionId);
+        setOffChainBalance(saved.offChainBalance);
+        setRoundNum(saved.roundNum);
+        setRoundHistory(saved.roundHistory);
+        try {
+          const onChain = await contract.sessions(saved.sessionId);
+          const isActive  = Number(onChain.status) === 0;
+          const isExpired = Math.floor(Date.now() / 1000) > saved.expiry;
+          if (!isActive) {
+            clearSession(addr);
+          } else if (isExpired) {
+            setStatus(SESSION_STATUS.SESSION_EXPIRED);
+          } else {
+            setStatus(SESSION_STATUS.SESSION_ACTIVE);
+          }
+        } catch {
+          setStatus(SESSION_STATUS.SESSION_ACTIVE);
+        }
+      }
 
       const bal = await contract.houseBalance();
       setHouseEth(ethers.formatUnits(bal, NATIVE_CURRENCY.decimals));
@@ -166,19 +246,20 @@ export function useSession() {
       masterSecretRef.current = masterSecret;
       depositParamsRef.current = { amount: amountWei, expiry, commitment };
 
-      // Immediately request EIP-712 session signature
+      // Immediately request EIP-712 session signature.
+      // Use the same signer that sent the deposit so the recovered address matches session.player.
       setStatus(SESSION_STATUS.SIGNING);
-      const signer = await provider.getSigner();
+      const signer = contract.runner;
       const addr   = await signer.getAddress();
 
-      const typedData = {
-        domain: {
+      const sig = await signer.signTypedData(
+        {
           name: "SessionGame",
           version: "1",
           chainId: CHAIN_ID,
           verifyingContract: SESSION_GAME_ADDRESS,
         },
-        types: {
+        {
           Session: [
             { name: "sessionId",     type: "uint256" },
             { name: "player",        type: "address" },
@@ -187,23 +268,29 @@ export function useSession() {
             { name: "commitment",    type: "bytes32" },
           ],
         },
-        primaryType: "Session",
-        message: {
-          sessionId:     newSessionId.toString(),
+        {
+          sessionId:     newSessionId,
           player:        addr,
-          depositAmount: amountWei.toString(),
-          expiry:        expiry.toString(),
+          depositAmount: amountWei,
+          expiry:        BigInt(expiry),
           commitment:    commitment,
         },
-      };
-
-      const sig = await provider.send("eth_signTypedData_v4", [
-        addr,
-        JSON.stringify(typedData),
-      ]);
+      );
 
       sessionSigRef.current = sig;
       setSessionId(newSessionId);
+      sessionIdRef.current = newSessionId;
+      saveSession(addr, {
+        sessionId:      newSessionId,
+        masterSecret:   masterSecret,
+        sessionSig:     sig,
+        depositAmount:  amountWei,
+        expiry:         expiry,
+        commitment:     commitment,
+        roundHistory:   [],
+        roundNum:       0,
+        offChainBalance: amountWei,
+      });
       setOffChainBalance(amountWei);
       offChainBalanceRef.current = amountWei;
 
@@ -276,6 +363,20 @@ export function useSession() {
     setOffChainBalance(newBalance);
     setLastResult({ playerWon, isTie, nextCard: next, nextSuit: randomSuit() });
     setStatus(SESSION_STATUS.SESSION_ACTIVE);
+
+    if (addressRef.current && sessionIdRef.current !== null) {
+      saveSession(addressRef.current, {
+        sessionId:       sessionIdRef.current,
+        masterSecret:    masterSecretRef.current,
+        sessionSig:      sessionSigRef.current,
+        depositAmount:   depositParamsRef.current.amount,
+        expiry:          depositParamsRef.current.expiry,
+        commitment:      depositParamsRef.current.commitment,
+        roundHistory:    roundHistoryRef.current,
+        roundNum:        roundNumRef.current,
+        offChainBalance: offChainBalanceRef.current,
+      });
+    }
   }, []);
 
   // ─── Cash out ─────────────────────────────────────────────────────────────
@@ -314,19 +415,73 @@ export function useSession() {
 
       setFinalPayout(payout);
       setStatus(SESSION_STATUS.CASHED_OUT);
+      clearSession(addressRef.current);
     } catch (e) {
       setError(parseError(e));
       setStatus(SESSION_STATUS.SESSION_ACTIVE);
     }
   }, [sessionId]);
 
+  // ─── Refund expired ──────────────────────────────────────────────────────
+
+  const refundExpired = useCallback(async (sessionIdToRefund) => {
+    const contract = contractRef.current;
+    if (!contract) return;
+    setError(null);
+    setStatus(SESSION_STATUS.REFUNDING);
+    try {
+      const tx = await contract.refundExpired(sessionIdToRefund);
+      await tx.wait();
+      clearSession(addressRef.current);
+      sessionIdRef.current = null;
+      setSessionId(null);
+      setFinalPayout(null);
+      setStatus(SESSION_STATUS.CASHED_OUT);
+      setStuckSessions((prev) => prev.filter((s) => s.sessionId !== sessionIdToRefund));
+    } catch (e) {
+      setError(parseError(e));
+      setStatus(SESSION_STATUS.SESSION_EXPIRED);
+    }
+  }, []);
+
+  // ─── Scan stuck sessions ──────────────────────────────────────────────────
+
+  const scanStuckSessions = useCallback(async () => {
+    const contract = contractRef.current;
+    const addr     = addressRef.current;
+    if (!contract || !addr) return;
+    setScanning(true);
+    setStuckSessions([]);
+    try {
+      const filter = contract.filters.SessionOpened(null, addr);
+      const events = await contract.queryFilter(filter, 0, "latest");
+      const nowSec = Math.floor(Date.now() / 1000);
+      const results = [];
+      for (const ev of events) {
+        const sid = Number(ev.args.sessionId);
+        try {
+          const s = await contract.sessions(sid);
+          if (Number(s.status) === 0 && Number(s.expiry) < nowSec) {
+            results.push({ sessionId: sid, depositAmount: s.depositAmount, expiry: Number(s.expiry) });
+          }
+        } catch {}
+      }
+      setStuckSessions(results);
+    } catch (e) {
+      setError("Scan failed: " + (e.message ?? "unknown error"));
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
   // ─── Reset ────────────────────────────────────────────────────────────────
 
   const reset = useCallback(() => {
+    clearSession(addressRef.current);
+    sessionIdRef.current = null;
     setStatus(SESSION_STATUS.IDLE);
     setSessionId(null);
     setOffChainBalance(null);
-    setMaxBetPerRound(null);
     setCurrentCard(null);
     setRoundNum(0);
     setRoundHistory([]);
@@ -361,5 +516,9 @@ export function useSession() {
     submitGuess,
     cashOut,
     reset,
+    stuckSessions,
+    scanning,
+    refundExpired,
+    scanStuckSessions,
   };
 }

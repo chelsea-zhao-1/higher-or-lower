@@ -55,12 +55,15 @@ export default function GameBoard({ state }) {
   const {
     status, offChainBalance, currentCard, currentSuit,
     roundNum, lastResult, finalPayout, houseEth, error,
+    sessionId,
     deposit, startRound, submitGuess, cashOut, reset,
+    stuckSessions, scanning, scanStuckSessions, refundExpired,
   } = state;
 
   const [amountInput, setAmountInput] = useState("1");
   const [expiryHours, setExpiryHours] = useState(4);
   const [betInput,    setBetInput]    = useState("0.1");
+  const [hasScanned,  setHasScanned]  = useState(false);
 
   // ─── Deposit screen ───────────────────────────────────────────────────────
 
@@ -100,6 +103,29 @@ export default function GameBoard({ state }) {
         </button>
         <p style={styles.sub}>2 MetaMask interactions: deposit tx + session signature</p>
         {error && <p style={styles.error}>{error}</p>}
+
+        <div style={styles.recoverSection}>
+          <button style={styles.btnScan} onClick={() => { scanStuckSessions(); setHasScanned(true); }} disabled={scanning}>
+            {scanning ? "Scanning…" : "Find Stuck Sessions"}
+          </button>
+          {stuckSessions.length > 0 && (
+            <div style={styles.stuckList}>
+              {stuckSessions.map((s) => (
+                <div key={s.sessionId} style={styles.stuckItem}>
+                  <span style={styles.stuckInfo}>
+                    Session #{s.sessionId} — {fmt(s.depositAmount)} USDC
+                  </span>
+                  <button style={styles.btnRefund} onClick={() => refundExpired(s.sessionId)}>
+                    Refund
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {hasScanned && !scanning && stuckSessions.length === 0 && (
+            <p style={styles.sub}>No expired sessions found.</p>
+          )}
+        </div>
       </div>
     );
   }
@@ -110,6 +136,28 @@ export default function GameBoard({ state }) {
 
   if (status === SESSION_STATUS.SIGNING) {
     return <Spinner text="Sign the session authorization in MetaMask…" />;
+  }
+
+  if (status === SESSION_STATUS.SESSION_EXPIRED) {
+    return (
+      <div style={styles.center}>
+        <h2 style={{ ...styles.heading, color: "#f59e0b" }}>Session Expired</h2>
+        <p style={styles.sub}>
+          Your session #{sessionId} expired. You can refund your original deposit.
+        </p>
+        <button style={styles.btnPrimary} onClick={() => refundExpired(sessionId)}>
+          Refund Deposit
+        </button>
+        <button style={{ ...styles.btnPrimary, background: "#475569", marginTop: -8 }} onClick={reset}>
+          Dismiss
+        </button>
+        {error && <p style={styles.error}>{error}</p>}
+      </div>
+    );
+  }
+
+  if (status === SESSION_STATUS.REFUNDING) {
+    return <Spinner text="Refunding deposit… (waiting for confirmation)" />;
   }
 
   // ─── Session active: between rounds ──────────────────────────────────────
@@ -363,4 +411,51 @@ const styles = {
   },
   spinnerText: { color: "#94a3b8", fontSize: 16 },
   error: { color: "#ef4444", fontSize: 14, maxWidth: 360, textAlign: "center" },
+  recoverSection: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 8,
+    paddingTop: 20,
+    borderTop: "1px solid #1e293b",
+    width: "100%",
+    maxWidth: 400,
+  },
+  btnScan: {
+    padding: "10px 24px",
+    fontSize: 14,
+    fontWeight: 600,
+    background: "#1e293b",
+    color: "#94a3b8",
+    border: "1px solid #334155",
+    borderRadius: 10,
+    cursor: "pointer",
+  },
+  stuckList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    width: "100%",
+  },
+  stuckItem: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px 16px",
+    background: "#1e293b",
+    border: "1px solid #334155",
+    borderRadius: 10,
+  },
+  stuckInfo: { fontSize: 14, color: "#f1f5f9" },
+  btnRefund: {
+    padding: "8px 18px",
+    fontSize: 13,
+    fontWeight: 700,
+    background: "#b45309",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    cursor: "pointer",
+  },
 };

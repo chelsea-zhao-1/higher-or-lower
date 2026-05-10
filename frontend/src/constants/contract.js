@@ -2,7 +2,7 @@
 export const CONTRACT_ADDRESS = "0xF525Ed0a987A1aBD5FE9DBC22269C44Db66e1B8B";
 
 // SessionGame — deployed to Arc Testnet
-export const SESSION_GAME_ADDRESS = "0x2cD20aD849DBc83fd29E23A5Ac898105Cf8143bA";
+export const SESSION_GAME_ADDRESS = "0xB0A622de5A303ef6488A676884e8468e0CE4C6d2";
 
 export const ABI = [
   // View
@@ -51,6 +51,7 @@ export const SESSION_GAME_ABI = [
   // Player actions
   "function deposit(bytes32 commitment, uint256 expiry) external payable returns (uint256 sessionId)",
   "function cashOut(uint256 sessionId, uint256 masterSecret, (uint256 roundNum, uint256 betAmount, bool guessHigher)[] rounds, bytes sessionSig) external",
+  "function refundExpired(uint256 sessionId) external",
 
   // Owner
   "function depositHouse() external payable",
@@ -64,6 +65,8 @@ export const SESSION_GAME_ABI = [
   "error InvalidSignature()",
   "error InsufficientHouseFunds()",
   "error TransferFailed()",
+  "error SessionNotExpired()",
+  "error NotYourSession()",
 
   // Events
   "event SessionOpened(uint256 indexed sessionId, address indexed player, uint256 depositAmount, uint256 expiry)",
