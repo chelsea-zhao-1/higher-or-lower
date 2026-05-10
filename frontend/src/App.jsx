@@ -1,10 +1,10 @@
 import React from "react";
-import { useGame, GAME_STATUS } from "./hooks/useGame.js";
+import { useSession } from "./hooks/useSession.js";
 import ConnectWallet from "./components/ConnectWallet.jsx";
 import GameBoard from "./components/GameBoard.jsx";
 
 export default function App() {
-  const game = useGame();
+  const game = useSession();
 
   return (
     <>
@@ -20,10 +20,6 @@ export default function App() {
         </>
       ) : (
         <ConnectWallet onConnect={game.connect} />
-      )}
-
-      {game.error && game.status === GAME_STATUS.IDLE && (
-        <p style={styles.globalError}>{game.error}</p>
       )}
     </>
   );
@@ -50,16 +46,5 @@ const styles = {
     fontSize: 13,
     color: "#94a3b8",
     fontFamily: "monospace",
-  },
-  globalError: {
-    position: "fixed",
-    bottom: 24,
-    left: "50%",
-    transform: "translateX(-50%)",
-    background: "#7f1d1d",
-    color: "#fca5a5",
-    padding: "10px 20px",
-    borderRadius: 8,
-    fontSize: 14,
   },
 };
