@@ -1,6 +1,6 @@
 # Higher or Lower
 
-An on-chain card game. Players deposit USDC on Circle Arc Testnet, bet and guess higher or lower on as many rounds as they want, and cash out. All verified by the smart contract, no middleman. Unlimited rounds, two transactions.
+An on-chain card game. Where players deposit USDC on Circle Arc Testnet, bet, guess higher or lower on as many rounds as they want, and cash out. All verified by the smart contract.
 
 **Live contract:** `0xB0A622de5A303ef6488A676884e8468e0CE4C6d2` on Arc Testnet (chain ID 5042002)
 
@@ -8,39 +8,38 @@ An on-chain card game. Players deposit USDC on Circle Arc Testnet, bet and guess
 
 # The Problem
 
-Traditional betting has a trust problem. Casinos and online platforms control the outcome — you're taking their word for it. Online platforms add fees on top, and you have no way to verify whether a result was changed after you placed your guess.
+In traditional betting there is a trust problem. Casinos and online platforms control the outcome and you have to trust them. There is no way to verify whether a result was changed after you placed your guess and the money isn't directly in your control.
 
-Going on-chain fixes the trust problem but creates a new one: if the contract picks each card the moment you guess, a miner can see your transaction in the mempool, know the next card, and front-run or suppress it. The house edge becomes an attack vector.
+Going on-chain can fix the trust problem but it is also vunerable to front running as everything is public. For example, if the contract picks each card the moment you guess, a miner can see your transaction in the mempool, know the next card, and front-run or suppress it.
 
-This game eliminates both. The card sequence is locked in cryptographically before play starts, and every outcome is verified on-chain at cashout.
+This game eliminates both issues. The card sequence is locked in cryptographically before play starts, and outcomes are verified on-chain when you cashout your earnings.
 
 ---
 
 ## What I Built
 
-The challenge was making a game that is simultaneously:
+The challenge was making something that is:
 
 - **Trustless** — neither the house nor the player can manipulate the cards
-- **Gas-efficient** — gameplay doesn't require an on chain transaction per round
+- **Gas-efficient** — gameplay doesn't require an on chain transaction per round played
 - **Financially sound** — the house can always pay out; players can always recover funds
 
-The solution combines a commit/reveal randomness scheme with EIP-712 session keys and full on-chain replay verification at cashout.
+The solution uses a commit/reveal randomness idea with EIP-712 session keys and full on-chain verification at cashout.
 
 ### House model
 
-I deploy the contract and seed it with USDC as the house bankroll. Players deposit to bet against that bankroll. The contract enforces a 2× check at deposit time — if my house balance can't cover a full-win session, no new sessions can open. When players lose rounds, the USDC stays in the contract. I can withdraw profits via `withdrawHouse()` at any time.
+I deployed the contract and funded it with circle's faucet USDC as the house bankroll. Players deposit to bet against that bankroll. The contract enforces a 2× check at deposit time. So, if the house balance can't cover a player win then no new sessions can open. When players lose rounds, the USDC stays in the contract.
 
 ---
 
 ## How to Play
 
 1. **Connect** — MetaMask on Arc Testnet.
-2. **Deposit** — Choose a USDC amount and session duration (1h / 4h / 24h). One on-chain transaction.
+2. **Fund your wallet** - Go to https://faucet.circle.com/ and deposit USDC.
+3. **Deposit** — Choose a USDC amount and session duration (1h / 4h / 24h). Confirm on-chain tx to store commitment.
 3. **Authorize** — Sign a gasless EIP-712 message to lock in cashout rights. No gas.
 4. **Play** — Entirely off-chain. Guess higher or lower each round; wins add to your balance, losses subtract. Tie: no change. Play as many rounds as you want within your session window.
-5. **Cash out** — One final transaction. The contract independently verifies every round and pays out.
-
-**Two transactions + one signature for an unlimited number of rounds.**
+5. **Cash out** — Last tx on-chain where contract verifies every round and pays out to your connected wallet.
 
 ### Card rankings
 
@@ -50,11 +49,11 @@ Cards rank from **1 (Ace, lowest) to 13 (King, highest)**:
 |-------|---|---|---|---|---|---|---|---|---|----|----|----|----|
 | Label | A | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | J  | Q  | K  |
 
-Suits are cosmetic — outcomes are determined by rank only.
+Suits are cosmetic so outcomes are determined by rank only.
 
 ### Session expiry
 
-If a session expires before cashout, the player calls `refundExpired` to recover their original deposit. The frontend detects stale sessions from localStorage and surfaces the refund option automatically.
+If a session expires before cashout, the player calls `refundExpired` to recover their original deposit. The frontend detects stale sessions from storage and initiates the refund option automatically.
 
 ---
 
@@ -74,13 +73,13 @@ The full card sequence is locked in before the game starts:
    ```
    card = keccak256(masterSecret, roundNum, nonce) % 13 + 1
    ```
-   `nonce = 0` → current card. `nonce = 1` → next card. The full sequence is fixed at deposit time — neither party can alter it.
+   `nonce = 0` → current card. `nonce = 1` → next card. The full sequence is fixed at deposit time so neither party can alter it.
 
 3. **Reveal (at cashout)** — The player submits `masterSecret`. The contract verifies the hash matches, re-derives every card, replays every round, recomputes the final balance, and rejects if anything doesn't match.
 
 ### EIP-712 session authorization
 
-Instead of a transaction per round, the player signs one structured off-chain message at session creation:
+Instead of a transaction per round, the player signs one off-chain message at session creation:
 
 ```
 Session(
@@ -92,36 +91,26 @@ Session(
 )
 ```
 
-The signature is domain-separated (bound to the contract address and chain ID) — it can't be replayed on another contract or network. The contract recovers the signer at cashout; if it doesn't match the session's player address, the cashout is rejected.
-
-- No one else can cash out your session.
-- All session parameters are cryptographically bound to your wallet.
-- Zero gas cost for authorization.
+The signature is bound to the contract address, so it can't be replayed on another contract or network.
 
 ### On-chain replay verification
 
-The contract never trusts the frontend's reported outcomes. At cashout it independently:
+The contract never trusts the frontend's reported outcomes. At cashout it will:
 
 1. Re-derives every card from `masterSecret`.
 2. Re-evaluates every guess.
 3. Recomputes the running balance from the deposit amount.
 4. Rejects if the result doesn't match the submitted history.
 
-A player cannot fabricate wins, inflate bets, or omit losing rounds.
+A player cannot change wins, inflate bets, or omit losing rounds.
 
 ---
 
-## Learnings
+## Thoughts
 
-**Sessions over single rounds.** The first version was one deposit, one round, done. It worked but the UX was terrible and gas was too much per play. Then I redesiged it around sessions — deposit once, play unlimited rounds off-chain, cash out once.
+**VRF vs commit/reveal.** Chainlink VRF would give provably random cards from an external oracle, but it requires an on-chain write per round which was too slow and too expensive... OD for this higher and lower card game. Commit/reveal locks the full card sequence on-chain before play starts. It's trustless and costs nothing extra per round. The tradeoff is the randomness quality depends on the browser's RNG rather than an external oracle.
 
-**VRF vs commit/reveal.** Chainlink VRF would give provably random cards from an external oracle, but it requires an on-chain write per round — too slow and too expensive. Commit/reveal locks the full card sequence on-chain before play starts. It's trustless and costs nothing extra per round. The tradeoff is the randomness quality depends on the browser's RNG rather than an external oracle.
-
-**EIP-712 killed the transaction problem.** Early on each round needed two transactions. Unusable. Session signatures let players authorize an entire session upfront — all rounds happen off-chain, and one final transaction settles everything.
-
-**Tooling matters.** Started on Base Sepolia. Slow RPCs, bad block explorer. Moved to Circle Arc Testnet and the development loop got noticeably faster.
-
-**Trustless means no escape hatch.** Every guarantee has to be provable from the contract alone — no admin override, no support ticket. Designing around that constraint changed how I think about building software.
+**EIP-712 solved the transaction problem.** In my first design each round needed two transactions. So for 5 rounds you would confirm tx 10 times. The UX was bad. Session signatures let players authorize an entire session upfront so all rounds are able to happen off-chain, and one final transaction settles everything.
 
 ---
 
